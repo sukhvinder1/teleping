@@ -219,15 +219,66 @@ def send_message(text: str, bot: str | None = None,
     return {"bot": name, "message_id": msg["message_id"]}
 
 
+def _buttonize_url(url: str) -> str:
+    """Make a URL legal for a Telegram inline button.
+
+    Telegram only allows http(s) and tg:// in buttons. Gmail links get
+    special handling so tapping opens the Gmail APP on the phone: both
+    googlegmail:// deep links and mail.google.com web links are wrapped
+    through this server's public /gmail redirect page (app first, web
+    fallback). Requires SERVICE_URL to be set; without it, web links pass
+    through unchanged and custom schemes raise a clear error.
+    """
+    service = os.environ.get("SERVICE_URL", "").rstrip("/")
+    is_app = url.startswith("googlegmail:")
+    is_gmail_web = url.startswith("https://mail.google.com/")
+    if not (is_app or is_gmail_web):
+        if url.split(":", 1)[0] not in ("http", "https", "tg"):
+            raise TgError(
+                f"button URL {url!r}: Telegram only allows http(s)/tg:// in "
+                "buttons; for Gmail use a googlegmail:// or "
+                "https://mail.google.com/ link and it will be app-wrapped")
+        return url
+    if not service:
+        if is_app:
+            raise TgError("googlegmail:// button needs SERVICE_URL set on "
+                          "the server for the /gmail redirect")
+        return url
+    if is_app:
+        app, web = url, "https://mail.google.com"
+    else:
+        web = url
+        # Derive an app deep link from .../u/<n>/#<view>/<threadid>
+        import re as _re
+        m = _re.search(r"/u/(\d+)/#[^/]+/([A-Za-z0-9_-]+)", url)
+        app = (f"googlegmail:///cv={m.group(2)}/accountId={m.group(1)}"
+               if m else "")
+    q = urllib.parse.urlencode({k: v for k, v in
+                                (("app", app), ("web", web)) if v})
+    return f"{service}/gmail?{q}"
+
+
 @mcp.tool()
 def send_with_buttons(text: str, buttons: dict[str, str],
-                      bot: str | None = None) -> dict:
-    """Send text with tappable URL buttons; `buttons` maps label -> URL."""
+                      bot: str | None = None,
+                      parse_mode: str | None = None,
+                      silent: bool = False) -> dict:
+    """Send text with tappable URL buttons; `buttons` maps label -> URL.
+
+    parse_mode: None (plain), "HTML", or "MarkdownV2" — same as send_message,
+    so rich formatting and buttons can be combined.
+    silent: deliver without sound/vibration.
+    Gmail links (googlegmail:// deep links or https://mail.google.com/ URLs)
+    are automatically wrapped so tapping the button opens the Gmail app on
+    the phone, falling back to the web. Other URLs must be http(s) or tg://
+    — Telegram rejects custom app schemes in inline buttons.
+    """
     name, token, chat_id = resolve_bot(bot)
-    keyboard = {"inline_keyboard": [[{"text": k, "url": v}
+    keyboard = {"inline_keyboard": [[{"text": k, "url": _buttonize_url(v)}
                                      for k, v in buttons.items()]]}
     msg = tg_call(token, "sendMessage", {
-        "chat_id": chat_id, "text": text, "reply_markup": keyboard})
+        "chat_id": chat_id, "text": text, "reply_markup": keyboard,
+        "parse_mode": parse_mode, "disable_notification": silent or None})
     return {"bot": name, "message_id": msg["message_id"]}
 
 
@@ -366,20 +417,48 @@ def read_replies(bot: str | None = None, ack: bool = False) -> list[dict]:
     return out
 
 
+GMAIL_REDIRECT_HTML = """<!doctype html><html><head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Opening Gmail…</title></head><body style="font-family:system-ui;
+text-align:center;padding-top:30vh;color:#555">
+<p>Opening Gmail…</p>
+<p><a id="w" href="">Open in browser instead</a></p>
+<script>
+var q = new URLSearchParams(location.search);
+var app = q.get("app"), web = q.get("web") || "https://mail.google.com";
+document.getElementById("w").href = web;
+if (app && /^googlegmail:/.test(app)) {
+  location.href = app;
+  // If the app isn't installed nothing happens; fall through to web.
+  setTimeout(function(){ location.href = web; }, 1600);
+} else { location.href = web; }
+</script></body></html>"""
+
+
+async def gmail_redirect(request):
+    from starlette.responses import HTMLResponse
+    return HTMLResponse(GMAIL_REDIRECT_HTML)
+
+
 def main() -> None:
     secret = os.environ.get("MCP_PATH_SECRET", "")
     path = f"/{secret}/mcp" if secret else "/mcp"
     if not secret:
         print("WARNING: MCP_PATH_SECRET unset — endpoint is guessable (/mcp)")
-    mcp.run_streamable_http_async  # attribute check before asyncio import
-    import asyncio
-    asyncio.run(mcp.run_streamable_http_async(
-        host="0.0.0.0",
-        port=int(os.environ.get("PORT", "8080")),
+    app = mcp.streamable_http_app(
         streamable_http_path=path,
         stateless_http=True,
         json_response=True,
-    ))
+        host="0.0.0.0",
+    )
+    # Public, secret-free helper: /gmail?app=googlegmail://...&web=https://...
+    # serves a page that bounces into the Gmail iOS/Android app with a web
+    # fallback. Needed because Telegram buttons reject custom URL schemes.
+    from starlette.routing import Route
+    app.router.routes.append(Route("/gmail", gmail_redirect))
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8080")),
+                log_level="warning")
 
 
 if __name__ == "__main__":

@@ -49,6 +49,13 @@ gsutil iam ch "serviceAccount:${SA}:roles/storage.objectAdmin" "gs://${BUCKET}"
 
 URL="$(gcloud run services describe "${SERVICE_NAME}" \
   --project "${PROJECT_ID}" --region "${REGION}" --format 'value(status.url)')"
+
+# The server needs its own public URL to build /gmail app-redirect button
+# links. Set it after the first deploy (idempotent on redeploys).
+gcloud run services update "${SERVICE_NAME}" \
+  --project "${PROJECT_ID}" --region "${REGION}" \
+  --update-env-vars "SERVICE_URL=${URL}" --quiet
+
 echo
 echo "MCP endpoint (add as a claude.ai custom connector — treat as secret):"
 echo "  ${URL}/${MCP_PATH_SECRET}/mcp"
