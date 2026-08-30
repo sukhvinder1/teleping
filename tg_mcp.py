@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+"""tg-mcp — remote MCP server exposing Telegram bot notifications as tools.
+
+One deployment serves any number of bots ("option 1" multi-bot design):
+tools take a `bot` name; credentials live server-side, never in chats.
+
+Bot registry (pick one):
+  * GCS (recommended, no redeploy to change bots): set BOTS_GCS_BUCKET and
+    optionally BOTS_GCS_OBJECT (default "tg-bots.json"). The object holds:
+        {"default": "personal",
+         "bots": {"personal": {"token": "123:ABC", "chat_id": "42"},
+                  "alerts":   {"token": "456:DEF", "chat_id": "42"}}}
+    The Cloud Run service account needs roles/storage.objectAdmin on the
+    bucket. The add_bot / remove_bot tools edit this object in place.
+  * Env var fallback (read-only, redeploy to change): TG_BOTS holding the
+    same JSON.
+
+Other env vars:
+  MCP_PATH_SECRET  unguessable path segment; the MCP endpoint becomes
+                   /<secret>/mcp. Required in production — it is the only
+                   thing keeping strangers from using your bots.
+  PORT             listen port (Cloud Run sets this).
+
+Connect from claude.ai: Settings -> Connectors -> Add custom connector ->
+  https://<cloud-run-url>/<MCP_PATH_SECRET>/mcp
+"""
+
+import json
+import os
+import urllib.error
+import urllib.parse
+import urllib.request
+
+from mcp.server.mcpserver import MCPServer
+
+TG_API = "https://api.telegram.org"
+GCS_API = "https://storage.googleapis.com"
+METADATA_TOKEN_URL = ("http://metadata.google.internal/computeMetadata/v1/"
+                      "instance/service-accounts/default/token")
+
+
+class TgError(Exception):
+    pass
+
+
+def http_json(req: urllib.request.Request) -> dict:
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.load(resp)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")[:500]
+        raise TgError(f"HTTP {e.code}: {body}") from None
+    except urllib.error.URLError as e:
+        raise TgError(f"network error: {e.reason}") from None
+
+
+def tg_call(token: str, method: str, params: dict) -> dict:
+    params = {k: (json.dumps(v) if isinstance(v, (dict, list)) else v)
+              for k, v in params.items() if v is not None}
+    req = urllib.request.Request(
+        f"{TG_API}/bot{token}/{method}",
+        data=urllib.parse.urlencode(params).encode())
+    result = http_json(req)
+    if not result.get("ok"):
+        raise TgError(f"Telegram: {result.get('description', result)}")
+    return result["result"]
+
+
+# ---------------------------------------------------------------- registry
+
+def _gcs_config() -> tuple[str, str] | None:
+    bucket = os.environ.get("BOTS_GCS_BUCKET")
+    if not bucket:
+        return None
+    return bucket, os.environ.get("BOTS_GCS_OBJECT", "tg-bots.json")
+
+
+def _gcs_token() -> str:
+    req = urllib.request.Request(METADATA_TOKEN_URL,
+                                 headers={"Metadata-Flavor": "Google"})
+    return http_json(req)["access_token"]
+
+
+def load_registry() -> dict:
+    gcs = _gcs_config()
+    if gcs:
+        bucket, obj = gcs
+        url = (f"{GCS_API}/storage/v1/b/{bucket}/o/"
+               f"{urllib.parse.quote(obj, safe='')}?alt=media")
+        req = urllib.request.Request(
+            url, headers={"Authorization": f"Bearer {_gcs_token()}"})
+        try:
+            return http_json(req)
+        except TgError as e:
+            if "HTTP 404" in str(e):
+                return {"default": None, "bots": {}}
+            raise
+    env = os.environ.get("TG_BOTS")
+    if env:
+        return json.loads(env)
+    raise TgError("no bot registry: set BOTS_GCS_BUCKET or TG_BOTS")
+
+
+def save_registry(registry: dict) -> None:
+    gcs = _gcs_config()
+    if not gcs:
+        raise TgError("registry is read-only (TG_BOTS env var); "
+                      "configure BOTS_GCS_BUCKET to enable add/remove")
+    bucket, obj = gcs
+    url = (f"{GCS_API}/upload/storage/v1/b/{bucket}/o"
+           f"?uploadType=media&name={urllib.parse.quote(obj, safe='')}")
+    req = urllib.request.Request(
+        url, data=json.dumps(registry, indent=2).encode(),
+        headers={"Authorization": f"Bearer {_gcs_token()}",
+                 "Content-Type": "application/json"})
+    http_json(req)
+
+
+def resolve_bot(bot: str | None) -> tuple[str, str, str]:
+    """Return (name, token, chat_id) for `bot` or the registry default."""
+    registry = load_registry()
+    bots = registry.get("bots", {})
+    if not bots:
+        raise TgError("registry has no bots; use add_bot first")
+    name = bot or registry.get("default") or next(iter(bots))
+    entry = bots.get(name)
+    if not entry:
+        raise TgError(f"unknown bot {name!r}; known: {sorted(bots)}")
+    return name, entry["token"], str(entry["chat_id"])
+
+
+# ------------------------------------------------------------------ server
+
+mcp = MCPServer(
+    "telegram-notify",
+    instructions=("Send Telegram notifications through named bots. "
+                  "Call list_bots to see which bots exist; omit `bot` "
+                  "to use the default."),
+)
+
+
+@mcp.tool()
+def list_bots() -> dict:
+    """List configured bot names and which one is the default.
+
+    Never returns tokens or chat ids.
+    """
+    registry = load_registry()
+    return {"bots": sorted(registry.get("bots", {})),
+            "default": registry.get("default")}
+
+
+@mcp.tool()
+def add_bot(name: str, token: str, chat_id: str, make_default: bool = False) -> str:
+    """Register a bot (or update an existing one) in the registry.
+
+    `token` is the @BotFather bot token, `chat_id` the destination chat.
+    Verifies the token with Telegram before saving.
+    """
+    me = tg_call(token, "getMe", {})
+    registry = load_registry()
+    registry.setdefault("bots", {})[name] = {"token": token, "chat_id": chat_id}
+    if make_default or not registry.get("default"):
+        registry["default"] = name
+    save_registry(registry)
+    return (f"saved bot {name!r} (@{me.get('username')}), "
+            f"default={registry['default']!r}")
+
+
+@mcp.tool()
+def remove_bot(name: str) -> str:
+    """Remove a bot from the registry."""
+    registry = load_registry()
+    if name not in registry.get("bots", {}):
+        raise TgError(f"unknown bot {name!r}")
+    del registry["bots"][name]
+    if registry.get("default") == name:
+        registry["default"] = next(iter(registry["bots"]), None)
+    save_registry(registry)
+    return f"removed {name!r}, default={registry.get('default')!r}"
+
+
+@mcp.tool()
+def send_message(text: str, bot: str | None = None,
+                 parse_mode: str | None = None, silent: bool = False,
+                 reply_to_message_id: int | None = None) -> dict:
+    """Send a text notification to the bot's configured chat.
+
+    parse_mode: None (plain), "HTML", or "MarkdownV2".
+    silent: deliver without sound/vibration.
+    """
+    name, token, chat_id = resolve_bot(bot)
+    msg = tg_call(token, "sendMessage", {
+        "chat_id": chat_id, "text": text, "parse_mode": parse_mode,
+        "disable_notification": silent or None,
+        "reply_to_message_id": reply_to_message_id})
+    return {"bot": name, "message_id": msg["message_id"]}
+
+
+@mcp.tool()
+def send_with_buttons(text: str, buttons: dict[str, str],
+                      bot: str | None = None) -> dict:
+    """Send text with tappable URL buttons; `buttons` maps label -> URL."""
+    name, token, chat_id = resolve_bot(bot)
+    keyboard = {"inline_keyboard": [[{"text": k, "url": v}
+                                     for k, v in buttons.items()]]}
+    msg = tg_call(token, "sendMessage", {
+        "chat_id": chat_id, "text": text, "reply_markup": keyboard})
+    return {"bot": name, "message_id": msg["message_id"]}
+
+
+@mcp.tool()
+def send_photo(photo_url: str, caption: str | None = None,
+               bot: str | None = None) -> dict:
+    """Send a photo by URL with an optional caption."""
+    name, token, chat_id = resolve_bot(bot)
+    msg = tg_call(token, "sendPhoto", {
+        "chat_id": chat_id, "photo": photo_url, "caption": caption})
+    return {"bot": name, "message_id": msg["message_id"]}
+
+
+@mcp.tool()
+def send_document(document_url: str, caption: str | None = None,
+                  bot: str | None = None) -> dict:
+    """Send a file by URL with an optional caption."""
+    name, token, chat_id = resolve_bot(bot)
+    msg = tg_call(token, "sendDocument", {
+        "chat_id": chat_id, "document": document_url, "caption": caption})
+    return {"bot": name, "message_id": msg["message_id"]}
+
+
+@mcp.tool()
+def read_replies(bot: str | None = None, ack: bool = False) -> list[dict]:
+    """Read incoming messages sent to the bot from its configured chat.
+
+    Each item has message_id, from, date, text, and — when the message was
+    a reply — in_reply_to {message_id, text}. With ack=True the returned
+    messages are consumed: the next ack'd read only shows newer ones.
+    Note: does not work if a webhook is set on the bot.
+    """
+    name, token, chat_id = resolve_bot(bot)
+    updates = tg_call(token, "getUpdates",
+                      {"timeout": 0, "allowed_updates": ["message"]})
+    out = []
+    for u in updates:
+        msg = u.get("message")
+        if not msg or str(msg.get("chat", {}).get("id")) != chat_id:
+            continue
+        item = {"bot": name, "message_id": msg["message_id"],
+                "from": msg.get("from", {}).get("first_name"),
+                "date": msg.get("date"),
+                "text": msg.get("text") or msg.get("caption")}
+        reply = msg.get("reply_to_message")
+        if reply:
+            item["in_reply_to"] = {
+                "message_id": reply["message_id"],
+                "text": reply.get("text") or reply.get("caption")}
+        out.append(item)
+    if ack and updates:
+        tg_call(token, "getUpdates",
+                {"offset": max(u["update_id"] for u in updates) + 1,
+                 "timeout": 0})
+    return out
+
+
+def main() -> None:
+    secret = os.environ.get("MCP_PATH_SECRET", "")
+    path = f"/{secret}/mcp" if secret else "/mcp"
+    if not secret:
+        print("WARNING: MCP_PATH_SECRET unset — endpoint is guessable (/mcp)")
+    mcp.run_streamable_http_async  # attribute check before asyncio import
+    import asyncio
+    asyncio.run(mcp.run_streamable_http_async(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", "8080")),
+        streamable_http_path=path,
+        stateless_http=True,
+        json_response=True,
+    ))
+
+
+if __name__ == "__main__":
+    main()

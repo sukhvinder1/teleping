@@ -51,3 +51,50 @@ newer ones. Note: Telegram keeps unconsumed updates for ~24h, and `read`
 won't work while a webhook is set on the bot.
 
 Run `python3 tg.py --help` or `python3 tg.py <TYPE> --help` for details.
+
+## tg-mcp — remote MCP server (for Claude cloud sessions)
+
+`tg_mcp.py` exposes the same functionality as a remote MCP server so any
+Claude session (cloud or local) can send/read Telegram messages as native
+tools — no shell needed. One deployment serves many bots: every tool takes
+an optional `bot` name; credentials stay server-side.
+
+**Tools:** `list_bots`, `add_bot`, `remove_bot`, `send_message`,
+`send_with_buttons`, `send_photo`, `send_document`, `read_replies`
+(includes reply-to tracking).
+
+**Bot registry:** a JSON object in a GCS bucket (`BOTS_GCS_BUCKET` env
+var), editable live via the `add_bot`/`remove_bot` tools or `gsutil` — no
+redeploy needed to add/remove bots. Falls back to a read-only `TG_BOTS`
+env var if no bucket is configured:
+
+```json
+{"default": "personal",
+ "bots": {"personal": {"token": "123:ABC", "chat_id": "42"},
+          "alerts":   {"token": "456:DEF", "chat_id": "42"}}}
+```
+
+**Deploy to Cloud Run:**
+
+```bash
+PROJECT_ID=my-gcp-project bash deploy-mcp.sh
+```
+
+The script creates the registry bucket, builds/deploys, grants the service
+account access, and prints the connector URL, which embeds a random secret
+path (the only access control — treat the URL itself as a secret):
+
+```
+https://tg-mcp-xxxx.a.run.app/<secret>/mcp
+```
+
+**Connect:** claude.ai → Settings → Connectors → Add custom connector →
+paste that URL. Then any cloud session can call `send_message` etc.
+
+**Local test:**
+
+```bash
+TG_BOTS='{"default":"x","bots":{"x":{"token":"...","chat_id":"..."}}}' \
+  MCP_PATH_SECRET=dev PORT=8931 python3 tg_mcp.py
+# endpoint: http://127.0.0.1:8931/dev/mcp
+```
