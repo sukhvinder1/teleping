@@ -1,52 +1,47 @@
-# ntfy on Google Cloud Run
+# tg — Telegram notification CLI
 
-This repo deploys [ntfy](https://ntfy.sh) (self-hosted push notification
-server) to Google Cloud Run using the official `binwiederhier/ntfy` image.
+A single-file, stdlib-only Python CLI to send yourself push notifications
+via a Telegram bot. Covers 14 message types.
 
-## Files
+## Setup
 
-- `Dockerfile` — wraps the official ntfy image, binds it to Cloud Run's
-  `$PORT`.
-- `server/ntfy.yml` — ntfy server config, tuned for Cloud Run's ephemeral
-  filesystem (in-memory cache).
-- `deploy-cloudrun.sh` — builds the image with Cloud Build and deploys it to
-  Cloud Run.
-
-## Deploy
+1. Create a bot with [@BotFather](https://t.me/BotFather) (`/newbot`) and copy the token.
+2. Message your bot once, then find your chat id:
+   `curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates"`
+3. Export credentials (never commit the token):
 
 ```bash
-gcloud auth login
-gcloud config set project YOUR_PROJECT_ID
-
-PROJECT_ID=YOUR_PROJECT_ID REGION=us-central1 SERVICE_NAME=ntfy \
-  bash deploy-cloudrun.sh
+export TG_BOT_TOKEN="123456:ABC..."
+export TG_CHAT_ID="8596273711"
 ```
 
-After the first deploy, update `base-url` in `server/ntfy.yml` to the
-Cloud Run URL you're given, then redeploy so ntfy generates correct links
-in notifications.
+## Usage
 
-## Important limitations on Cloud Run
+```bash
+python3 tg.py <TYPE> [args...]
+```
 
-- **No persistent disk.** Cloud Run containers are stateless and can be
-  killed/rescheduled at any time. This config uses `cache-file: ":memory:"`,
-  so message history, attachments, and any local auth database are lost on
-  every restart or scale-to-zero event. If you need durable message
-  history, user accounts, or attachments, either:
-  - mount a [Cloud Storage FUSE volume](https://cloud.google.com/run/docs/configuring/services/cloud-storage-volume-mounts) for the cache/attachment dirs, or
-  - run ntfy on a small GCE VM or GKE with a real persistent disk instead.
-- **Long-lived connections.** ntfy clients hold open WebSocket/SSE
-  connections for real-time delivery. The deploy script sets
-  `--min-instances 1` (avoid cold starts dropping connections),
-  `--timeout 3600` (max request duration), and `--session-affinity`.
-- **Concurrency**: adjust `--concurrency` based on expected number of
-  simultaneous subscribers per instance.
-- **Auth**: for a private instance, set `auth-default-access: deny-all` and
-  configure users via `ntfy user add`, but remember the auth database also
-  needs persistent storage to survive restarts (see above).
+| Type | Example |
+|------|---------|
+| `text` | `python3 tg.py text "Deploy finished ✅"` |
+| `html` | `python3 tg.py html "<b>Alert:</b> disk at <code>91%</code> <tg-spoiler>secret</tg-spoiler>"` |
+| `markdown` | `python3 tg.py markdown "*bold* _italic_ \|\|spoiler\|\|"` |
+| `silent` | `python3 tg.py silent "FYI, no buzz"` |
+| `buttons` | `python3 tg.py buttons "Build failed" --button "Logs=https://ci.example.com"` |
+| `photo` | `python3 tg.py photo ./chart.png --caption "Daily stats"` |
+| `document` | `python3 tg.py document ./error.log --caption "Full log"` |
+| `location` | `python3 tg.py location 48.8584 2.2945` |
+| `venue` | `python3 tg.py venue 51.5007 -0.1246 "Big Ben" "London"` |
+| `poll` | `python3 tg.py poll "Lunch?" "Pizza" "Sushi" "Salad"` |
+| `quiz` | `python3 tg.py quiz "2+2?" --answers 3 4 5 --correct 1` |
+| `dice` | `python3 tg.py dice --emoji 🎰` |
+| `contact` | `python3 tg.py contact +15551234567 Jane --last-name Doe` |
+| `reply` | `python3 tg.py reply 42 "Replying to message 42"` |
 
-## Alternative: GCE VM
+Global flags usable with any type: `--silent`, `--protect` (block
+forwarding), `--reply-to MSG_ID`, `--token`, `--chat-id`.
 
-If you need durable storage without extra plumbing, a small `e2-micro` GCE
-VM running ntfy via `apt` or Docker with a persistent disk is simpler and
-avoids the stateless-storage caveats above.
+`photo` and `document` accept either a URL or a local file path
+(local files are uploaded; documents up to 50 MB).
+
+Run `python3 tg.py --help` or `python3 tg.py <TYPE> --help` for details.
