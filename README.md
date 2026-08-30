@@ -37,11 +37,17 @@ python3 tg.py <TYPE> [args...]
 | `dice` | `python3 tg.py dice --emoji 🎰` |
 | `contact` | `python3 tg.py contact +15551234567 Jane --last-name Doe` |
 | `reply` | `python3 tg.py reply 42 "Replying to message 42"` |
+| `read` | `python3 tg.py read` — list incoming messages; replies show `↳ in reply to #id: <original text>` |
 
 Global flags usable with any type: `--silent`, `--protect` (block
 forwarding), `--reply-to MSG_ID`, `--token`, `--chat-id`.
 
 `photo` and `document` accept either a URL or a local file path
 (local files are uploaded; documents up to 50 MB).
+
+`read` extras: `--wait N` long-polls up to N seconds for new messages;
+`--ack` marks shown messages consumed so the next `read --ack` only shows
+newer ones. Note: Telegram keeps unconsumed updates for ~24h, and `read`
+won't work while a webhook is set on the bot.
 
 Run `python3 tg.py --help` or `python3 tg.py <TYPE> --help` for details.

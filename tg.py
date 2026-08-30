@@ -129,6 +129,55 @@ def parse_buttons(specs: list[str]) -> dict:
     return {"inline_keyboard": [row]}
 
 
+def format_update(update: dict) -> str | None:
+    """Render one getUpdates entry as a human-readable line (or None to skip)."""
+    msg = update.get("message") or update.get("edited_message")
+    if not msg:
+        return None
+    who = msg.get("from", {}).get("first_name", "?")
+    when = msg.get("date", 0)
+    import datetime
+    ts = datetime.datetime.fromtimestamp(when).strftime("%Y-%m-%d %H:%M:%S")
+    text = msg.get("text") or msg.get("caption") or "<non-text message>"
+    line = f"[{ts}] #{msg['message_id']} {who}: {text}"
+    reply = msg.get("reply_to_message")
+    if reply:
+        orig = reply.get("text") or reply.get("caption") or "<non-text message>"
+        if len(orig) > 60:
+            orig = orig[:57] + "..."
+        line += f"\n    ↳ in reply to #{reply['message_id']}: {orig}"
+    if "edited_message" in update:
+        line += "  (edited)"
+    return line
+
+
+def cmd_read(token: str, chat_id: str, args) -> None:
+    """Read incoming messages (your replies to the bot) via getUpdates."""
+    params: dict = {"timeout": 0, "allowed_updates": ["message", "edited_message"]}
+    if args.wait:
+        params["timeout"] = args.wait
+    if args.offset is not None:
+        params["offset"] = args.offset
+
+    updates = call_api(token, "getUpdates", params)
+    # Only show messages from the configured chat.
+    updates = [u for u in updates
+               if str((u.get("message") or u.get("edited_message") or {})
+                      .get("chat", {}).get("id")) == str(chat_id)]
+    if not updates:
+        print("no new messages")
+        return
+    for u in updates:
+        line = format_update(u)
+        if line:
+            print(line)
+    if args.ack:
+        # Confirm consumption so the next `read --ack` only shows newer messages.
+        last_id = max(u["update_id"] for u in updates)
+        call_api(token, "getUpdates", {"offset": last_id + 1, "timeout": 0})
+        print(f"(acknowledged through update {last_id}; next read shows only newer)")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="tg",
@@ -209,8 +258,20 @@ def main() -> None:
     p.add_argument("message_id", type=int)
     p.add_argument("text")
 
+    p = sub.add_parser("read", help="read incoming messages; shows which message each reply is to")
+    p.add_argument("--wait", type=int, metavar="SECONDS",
+                   help="long-poll: block up to N seconds waiting for new messages")
+    p.add_argument("--ack", action="store_true",
+                   help="mark shown messages as consumed (next read --ack shows only newer)")
+    p.add_argument("--offset", type=int,
+                   help="start from this update_id (advanced)")
+
     args = parser.parse_args()
     token, chat_id = get_config(args)
+
+    if args.command == "read":
+        cmd_read(token, chat_id, args)
+        return
 
     common = {
         "chat_id": chat_id,
