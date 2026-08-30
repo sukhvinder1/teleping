@@ -21,7 +21,7 @@ NAME="$(printf '%s' "${ME_JSON}" | python3 -c '
 import json, sys, re
 r = json.load(sys.stdin)
 if not r.get("ok"):
-    sys.exit(f"error: Telegram rejected the token: {r.get(\"description\")}")
+    sys.exit("error: Telegram rejected the token: " + str(r.get("description")))
 username = r["result"]["username"]
 # the_munim_bot -> the-munim
 name = re.sub(r"_bot$", "", username)
