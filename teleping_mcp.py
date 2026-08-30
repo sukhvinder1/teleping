@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""tg-mcp — remote MCP server exposing Telegram bot notifications as tools.
+"""teleping — remote MCP server exposing Telegram bot notifications as tools.
 
 One deployment serves any number of bots ("option 1" multi-bot design):
 tools take a `bot` name; credentials live server-side, never in chats.
 
 Bot registry (pick one):
   * GCS (recommended, no redeploy to change bots): set BOTS_GCS_BUCKET and
-    optionally BOTS_GCS_OBJECT (default "tg-bots.json"). The object holds:
+    optionally BOTS_GCS_OBJECT (default "teleping-bots.json"). The object holds:
         {"default": "personal",
          "bots": {"personal": {"token": "123:ABC", "chat_id": "42"},
                   "alerts":   {"token": "456:DEF", "chat_id": "42"}}}
@@ -72,7 +72,7 @@ def _gcs_config() -> tuple[str, str] | None:
     bucket = os.environ.get("BOTS_GCS_BUCKET")
     if not bucket:
         return None
-    return bucket, os.environ.get("BOTS_GCS_OBJECT", "tg-bots.json")
+    return bucket, os.environ.get("BOTS_GCS_OBJECT", "teleping-bots.json")
 
 
 def _gcs_token() -> str:
@@ -132,7 +132,7 @@ def resolve_bot(bot: str | None) -> tuple[str, str, str]:
 # ------------------------------------------------------------------ server
 
 mcp = MCPServer(
-    "telegram-notify",
+    "teleping",
     instructions=("Send Telegram notifications through named bots. "
                   "Call list_bots to see which bots exist; omit `bot` "
                   "to use the default."),

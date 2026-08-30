@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Deploy the tg-mcp Telegram MCP server to Cloud Run.
+# Deploy the teleping Telegram MCP server to Cloud Run.
 #
 # Usage:
 #   PROJECT_ID=my-project ./deploy-mcp.sh
 #
 # Optional env vars:
 #   REGION        (default us-central1)
-#   SERVICE_NAME  (default tg-mcp)
-#   BUCKET        GCS bucket for the bot registry (default <project>-tg-bots;
+#   SERVICE_NAME  (default teleping)
+#   BUCKET        GCS bucket for the bot registry (default <project>-teleping-bots;
 #                 created if missing)
 set -euo pipefail
 
 PROJECT_ID="${PROJECT_ID:?Set PROJECT_ID to your GCP project id}"
 REGION="${REGION:-us-central1}"
-SERVICE_NAME="${SERVICE_NAME:-tg-mcp}"
-BUCKET="${BUCKET:-${PROJECT_ID}-tg-bots}"
+SERVICE_NAME="${SERVICE_NAME:-teleping}"
+BUCKET="${BUCKET:-${PROJECT_ID}-teleping-bots}"
 IMAGE="gcr.io/${PROJECT_ID}/${SERVICE_NAME}"
 
 # Unguessable path segment protecting the endpoint. Reuse the service's

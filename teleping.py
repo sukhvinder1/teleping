@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tg — send Telegram notifications from the command line.
+"""teleping — send Telegram notifications from the command line.
 
 Supports all 14 message types demoed for this bot, each as a subcommand.
 Uses only the Python standard library (no pip installs needed).
@@ -9,21 +9,21 @@ Setup:
     export TG_CHAT_ID="8596273711"        # your chat id (getUpdates)
 
 Examples:
-    ./tg.py text "Deploy finished ✅"
-    ./tg.py html "<b>Alert:</b> disk at <code>91%</code>"
-    ./tg.py markdown "*bold* _italic_ ||spoiler||"
-    ./tg.py silent "Low-priority FYI"
-    ./tg.py buttons "Build failed" --button "Logs=https://example.com/logs" --button "Dashboard=https://example.com"
-    ./tg.py photo https://picsum.photos/600/400 --caption "A chart"
-    ./tg.py photo ./graph.png --caption "Local file works too"
-    ./tg.py document ./error.log --caption "Full log attached"
-    ./tg.py location 48.8584 2.2945
-    ./tg.py venue 51.5007 -0.1246 "Big Ben" "London SW1A 0AA"
-    ./tg.py poll "Lunch?" "Pizza" "Sushi" "Salad"
-    ./tg.py quiz "2+2?" --answers "3" "4" "5" --correct 1
-    ./tg.py dice --emoji 🎰
-    ./tg.py contact +15551234567 "Jane" --last-name "Doe"
-    ./tg.py reply 42 "Replying to message 42" --protect
+    ./teleping.py text "Deploy finished ✅"
+    ./teleping.py html "<b>Alert:</b> disk at <code>91%</code>"
+    ./teleping.py markdown "*bold* _italic_ ||spoiler||"
+    ./teleping.py silent "Low-priority FYI"
+    ./teleping.py buttons "Build failed" --button "Logs=https://example.com/logs" --button "Dashboard=https://example.com"
+    ./teleping.py photo https://picsum.photos/600/400 --caption "A chart"
+    ./teleping.py photo ./graph.png --caption "Local file works too"
+    ./teleping.py document ./error.log --caption "Full log attached"
+    ./teleping.py location 48.8584 2.2945
+    ./teleping.py venue 51.5007 -0.1246 "Big Ben" "London SW1A 0AA"
+    ./teleping.py poll "Lunch?" "Pizza" "Sushi" "Salad"
+    ./teleping.py quiz "2+2?" --answers "3" "4" "5" --correct 1
+    ./teleping.py dice --emoji 🎰
+    ./teleping.py contact +15551234567 "Jane" --last-name "Doe"
+    ./teleping.py reply 42 "Replying to message 42" --protect
 """
 
 import argparse
@@ -180,7 +180,7 @@ def cmd_read(token: str, chat_id: str, args) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        prog="tg",
+        prog="teleping",
         description="Send Telegram notifications (14 message types).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__.split("Examples:")[1] if "Examples:" in __doc__ else None,
