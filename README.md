@@ -91,6 +91,24 @@ https://teleping-xxxx.a.run.app/<secret>/mcp
 **Connect:** claude.ai → Settings → Connectors → Add custom connector →
 paste that URL. Then any cloud session can call `send_message` etc.
 
+**Managing bots from your local machine** (`botctl.sh` — edits the GCS
+registry directly, so tokens never pass through a chat; requires an
+authenticated `gcloud`/`gsutil`):
+
+```bash
+export BUCKET=my-project-teleping-bots
+
+./botctl.sh list                                  # names, masked tokens
+./botctl.sh add alerts <token> <chat_id>          # add or overwrite a bot
+./botctl.sh add alerts <token> <chat_id> --default
+./botctl.sh rotate personal <new_token>           # after revoking in @BotFather
+./botctl.sh remove alerts
+./botctl.sh set-default alerts
+```
+
+Tokens are verified against Telegram (`getMe`) before saving, and the
+server picks up changes on its next request — no redeploy or restart.
+
 **Local test:**
 
 ```bash
