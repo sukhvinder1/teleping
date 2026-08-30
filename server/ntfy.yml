@@ -1,0 +1,20 @@
+# Minimal ntfy server config for running on Cloud Run.
+#
+# Cloud Run's filesystem is ephemeral: anything written to disk (the message
+# cache DB, attachments, auth DB) is lost whenever the container restarts or
+# scales to zero. This config uses an in-memory cache so the service still
+# works for pub/sub delivery, but message history and attachments will not
+# survive a restart. For durable history/auth, run ntfy on a VM or GKE with a
+# persistent volume instead, or point auth-file/cache-file at a mounted
+# Cloud Storage FUSE volume / Filestore share.
+
+base-url: "https://REPLACE_WITH_YOUR_CLOUD_RUN_URL"
+
+# ":memory:" keeps recent messages in RAM only (cleared on restart/scale-to-zero).
+cache-file: ":memory:"
+cache-duration: "12h"
+
+# Attachments require persistent storage to survive restarts; disabled by default here.
+# attachment-cache-dir: "/data/attachments"
+
+behind-proxy: true
