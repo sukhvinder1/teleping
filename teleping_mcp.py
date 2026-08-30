@@ -32,6 +32,7 @@ import urllib.parse
 import urllib.request
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 TG_API = "https://api.telegram.org"
 GCS_API = "https://storage.googleapis.com"
@@ -39,7 +40,9 @@ METADATA_TOKEN_URL = ("http://metadata.google.internal/computeMetadata/v1/"
                       "instance/service-accounts/default/token")
 
 
-class TgError(Exception):
+# Subclassing ToolError makes the message visible to the calling agent
+# instead of a generic "Error executing tool".
+class TgError(ToolError):
     pass
 
 
@@ -133,9 +136,27 @@ def resolve_bot(bot: str | None) -> tuple[str, str, str]:
 
 mcp = MCPServer(
     "teleping",
-    instructions=("Send Telegram notifications through named bots. "
-                  "Call list_bots to see which bots exist; omit `bot` "
-                  "to use the default."),
+    instructions=(
+        "Teleping sends Telegram notifications to the user's phone through "
+        "named bots and reads their replies. Every send/read tool takes an "
+        "optional `bot` name selecting which bot (and therefore which "
+        "destination chat) to use; omit it for the default bot, and call "
+        "list_bots to discover what exists.\n"
+        "Message types: send_message covers plain text, HTML, MarkdownV2 "
+        "(parse_mode), silent delivery, and threaded replies "
+        "(reply_to_message_id). Richer types have dedicated tools: "
+        "send_with_buttons (tappable URL buttons), send_photo, "
+        "send_document, send_location, send_venue, send_poll (regular or "
+        "quiz mode), send_dice (animated emoji), send_contact.\n"
+        "Two-way: read_replies returns messages the user sent to the bot, "
+        "including which earlier message each reply was to (in_reply_to); "
+        "pass ack=true to consume them so the next ack'd read only shows "
+        "newer ones.\n"
+        "Limits: photos/documents are sent by public URL only (no file "
+        "upload). Anything not listed above (stickers, audio, video, "
+        "albums, editing sent messages) is unsupported — say so rather "
+        "than improvising. Bot management: add_bot (also rotates a token "
+        "when reusing a name) and remove_bot."),
 )
 
 
@@ -155,7 +176,8 @@ def add_bot(name: str, token: str, chat_id: str, make_default: bool = False) -> 
     """Register a bot (or update an existing one) in the registry.
 
     `token` is the @BotFather bot token, `chat_id` the destination chat.
-    Verifies the token with Telegram before saving.
+    Verifies the token with Telegram before saving. Reusing an existing
+    name overwrites that bot — this is also how you rotate a token.
     """
     me = tg_call(token, "getMe", {})
     registry = load_registry()
@@ -212,7 +234,10 @@ def send_with_buttons(text: str, buttons: dict[str, str],
 @mcp.tool()
 def send_photo(photo_url: str, caption: str | None = None,
                bot: str | None = None) -> dict:
-    """Send a photo by URL with an optional caption."""
+    """Send a photo by public URL with an optional caption.
+
+    URL only — uploading local file content is not supported.
+    """
     name, token, chat_id = resolve_bot(bot)
     msg = tg_call(token, "sendPhoto", {
         "chat_id": chat_id, "photo": photo_url, "caption": caption})
@@ -222,10 +247,88 @@ def send_photo(photo_url: str, caption: str | None = None,
 @mcp.tool()
 def send_document(document_url: str, caption: str | None = None,
                   bot: str | None = None) -> dict:
-    """Send a file by URL with an optional caption."""
+    """Send a file by public URL with an optional caption.
+
+    URL only — uploading local file content is not supported.
+    """
     name, token, chat_id = resolve_bot(bot)
     msg = tg_call(token, "sendDocument", {
         "chat_id": chat_id, "document": document_url, "caption": caption})
+    return {"bot": name, "message_id": msg["message_id"]}
+
+
+@mcp.tool()
+def send_location(latitude: float, longitude: float,
+                  bot: str | None = None) -> dict:
+    """Send a map pin at the given coordinates."""
+    name, token, chat_id = resolve_bot(bot)
+    msg = tg_call(token, "sendLocation", {
+        "chat_id": chat_id, "latitude": latitude, "longitude": longitude})
+    return {"bot": name, "message_id": msg["message_id"]}
+
+
+@mcp.tool()
+def send_venue(latitude: float, longitude: float, title: str, address: str,
+               bot: str | None = None) -> dict:
+    """Send a map pin labeled with a place name and address."""
+    name, token, chat_id = resolve_bot(bot)
+    msg = tg_call(token, "sendVenue", {
+        "chat_id": chat_id, "latitude": latitude, "longitude": longitude,
+        "title": title, "address": address})
+    return {"bot": name, "message_id": msg["message_id"]}
+
+
+@mcp.tool()
+def send_poll(question: str, options: list[str], bot: str | None = None,
+              quiz_correct_option: int | None = None,
+              quiz_explanation: str | None = None,
+              allows_multiple_answers: bool = False) -> dict:
+    """Send a poll the user can vote on (2-10 options).
+
+    Set quiz_correct_option (0-based index into options) to make it a quiz
+    with one right answer; quiz_explanation is shown after answering.
+    allows_multiple_answers only applies to regular polls, not quizzes.
+    """
+    name, token, chat_id = resolve_bot(bot)
+    if not 2 <= len(options) <= 10:
+        raise TgError("polls need 2-10 options")
+    params = {"chat_id": chat_id, "question": question, "options": options}
+    if quiz_correct_option is not None:
+        if not 0 <= quiz_correct_option < len(options):
+            raise TgError(f"quiz_correct_option must be 0..{len(options) - 1}")
+        params.update({"type": "quiz",
+                       "correct_option_id": quiz_correct_option,
+                       "explanation": quiz_explanation})
+    else:
+        params["allows_multiple_answers"] = allows_multiple_answers or None
+    msg = tg_call(token, "sendPoll", params)
+    return {"bot": name, "message_id": msg["message_id"]}
+
+
+@mcp.tool()
+def send_dice(emoji: str = "🎲", bot: str | None = None) -> dict:
+    """Send an animated emoji that lands on a random value.
+
+    emoji must be one of: 🎲 🎯 🏀 ⚽ 🎳 🎰
+    """
+    allowed = {"🎲", "🎯", "🏀", "⚽", "🎳", "🎰"}
+    if emoji not in allowed:
+        raise TgError(f"emoji must be one of {' '.join(sorted(allowed))}")
+    name, token, chat_id = resolve_bot(bot)
+    msg = tg_call(token, "sendDice", {"chat_id": chat_id, "emoji": emoji})
+    return {"bot": name, "message_id": msg["message_id"],
+            "value": msg.get("dice", {}).get("value")}
+
+
+@mcp.tool()
+def send_contact(phone_number: str, first_name: str,
+                 last_name: str | None = None,
+                 bot: str | None = None) -> dict:
+    """Send a contact card (phone number + name)."""
+    name, token, chat_id = resolve_bot(bot)
+    msg = tg_call(token, "sendContact", {
+        "chat_id": chat_id, "phone_number": phone_number,
+        "first_name": first_name, "last_name": last_name})
     return {"bot": name, "message_id": msg["message_id"]}
 
 

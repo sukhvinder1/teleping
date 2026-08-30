@@ -59,9 +59,13 @@ Claude session (cloud or local) can send/read Telegram messages as native
 tools — no shell needed. One deployment serves many bots: every tool takes
 an optional `bot` name; credentials stay server-side.
 
-**Tools:** `list_bots`, `add_bot`, `remove_bot`, `send_message`,
-`send_with_buttons`, `send_photo`, `send_document`, `read_replies`
-(includes reply-to tracking).
+**Tools (13):** `send_message` (plain/HTML/MarkdownV2, silent, threaded
+replies), `send_with_buttons`, `send_photo`, `send_document` (URL only),
+`send_location`, `send_venue`, `send_poll` (regular or quiz mode),
+`send_dice`, `send_contact`, `read_replies` (with reply-to tracking),
+plus `list_bots`, `add_bot` (also rotates tokens), `remove_bot`.
+Server instructions teach connected agents the full menu, the multi-bot
+pattern, and what is unsupported.
 
 **Bot registry:** a JSON object in a GCS bucket (`BOTS_GCS_BUCKET` env
 var), editable live via the `add_bot`/`remove_bot` tools or `gsutil` — no
